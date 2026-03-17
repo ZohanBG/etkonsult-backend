@@ -20,6 +20,7 @@ nul
 
 # testing
 coverage
+coverage-*
 
 # logs
 *.log
@@ -35,6 +36,9 @@ uploads/*
 
 # Prisma generated
 /generated/prisma
+
+# data (Google Sheets snapshots)
+data/
 
 # misc
 *.tsbuildinfo
