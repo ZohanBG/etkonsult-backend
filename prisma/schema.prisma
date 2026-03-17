@@ -1,0 +1,402 @@
+// Prisma schema for Vehicle Management System (МПС)
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ============== ENUMS ==============
+
+enum UserStatus {
+  PENDING
+  ACTIVE
+  INACTIVE
+  LOCKED
+}
+
+enum RequestImageType {
+  photo
+  offer
+  document
+}
+
+enum ResourceItemType {
+  file
+  link
+}
+
+// ============== MODELS ==============
+
+model User {
+  id                String      @id @default(uuid())
+  email             String      @unique
+  username          String?     @unique
+  passwordHash      String
+  totpSecret        String?
+  totpEnabled       Boolean     @default(false)
+  status            UserStatus  @default(ACTIVE)
+  failedAttempts    Int         @default(0)
+  lastFailedAttempt DateTime?
+  lockedUntil       DateTime?
+  createdAt         DateTime    @default(now())
+  updatedAt         DateTime    @updatedAt
+
+  sessions          Session[]
+  roles             UserRole[]
+  auditLogs         AuditLog[]
+  createdVehicles   Vehicle[]
+  agentRequests     Request[]  @relation("agentRequests")
+  processedRequests Request[]  @relation("processedRequests")
+  agentMappings     AgentMapping[]
+  pushSubscriptions PushSubscription[]
+  notifications     Notification[]
+
+  @@map("users")
+}
+
+model Session {
+  id               String   @id @default(uuid())
+  userId           String
+  token            String   @unique
+  refreshToken     String   @unique
+  fingerprint      String
+  deviceInfo       Json?
+  ipAddress        String?
+  userAgent        String?
+  expiresAt        DateTime
+  refreshExpiresAt DateTime
+  createdAt        DateTime @default(now())
+
+  user             User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([token])
+  @@index([refreshToken])
+  @@map("sessions")
+}
+
+model Role {
+  id          String     @id @default(uuid())
+  name        String     @unique
+  description String?
+  permissions Json       @default("[]")
+  isSystem    Boolean    @default(false)
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+
+  users       UserRole[]
+
+  @@map("roles")
+}
+
+model UserRole {
+  userId     String
+  roleId     String
+  assignedAt DateTime @default(now())
+
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role       Role     @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@id([userId, roleId])
+  @@map("user_roles")
+}
+
+model AuditLog {
+  id         String   @id @default(uuid())
+  userId     String?
+  action     String
+  entityType String
+  entityId   String?
+  oldValue   Json?
+  newValue   Json?
+  ipAddress  String?
+  userAgent  String?
+  timestamp  DateTime @default(now())
+
+  user       User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@index([entityType, entityId])
+  @@index([timestamp])
+  @@map("audit_logs")
+}
+
+// Sprint 6: Vehicle & Owner Entities
+model Vehicle {
+  id                 String   @id @default(uuid())
+  talonNumber        String   @unique
+  registrationNumber String
+  engineCapacity     String
+  powerKW            String
+  purpose            String   @default("Лични нужди")
+  rightHandDrive     Boolean  @default(false)
+  notes              String?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+  createdById        String
+  ownerId            String?
+
+  createdBy          User           @relation(fields: [createdById], references: [id])
+  owner              Owner?         @relation(fields: [ownerId], references: [id])
+  images             VehicleImage[]
+
+  @@index([registrationNumber])
+  @@index([ownerId])
+  @@map("vehicles")
+}
+
+model Owner {
+  id         String   @id @default(uuid())
+  identifier String   @unique  // ЕГН/ЕИК/ЛНЧ
+  name       String
+  address    String
+  phone      String?
+  email      String?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  vehicles   Vehicle[]
+
+  @@map("owners")
+}
+
+model VehicleImage {
+  id           String   @id @default(uuid())
+  vehicleId    String
+  path         String
+  originalName String
+  mimeType     String
+  size         Int
+  uploadedAt   DateTime @default(now())
+
+  vehicle      Vehicle  @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+
+  @@index([vehicleId])
+  @@map("vehicle_images")
+}
+
+model EmailVerification {
+  id          String   @id @default(uuid())
+  userId      String
+  token       String   // 6-digit code (not globally unique)
+  fingerprint String
+  verified    Boolean  @default(false)
+  attempts    Int      @default(0)
+  expiresAt   DateTime
+  createdAt   DateTime @default(now())
+
+  @@unique([userId, token])
+  @@index([userId])
+  @@map("email_verifications")
+}
+
+// Agent Request/Offer workflow
+enum RequestStatus {
+  ZAYAVENA           // заявена - initial (agent created request)
+  OBRABOTENA         // обработена - staff uploaded offer photos
+  OTKAZANA           // отказана - staff declined request (end state)
+  OTKAZANA_OT_AGENT  // отказана от агент - agent cancelled own request (end state)
+  PRIETA_OFERTA      // приета оферта - agent accepted (sticker required)
+  OTKAZANA_OFERTA    // отказана оферта - agent rejected offer (end state)
+  ZAVURSHENA         // завършена - staff uploaded final documents (end state)
+}
+
+enum RequestType {
+  NOVA_POLICA   // Нова полица (default — existing behavior)
+  VNOSKA        // Вноска по полица
+}
+
+model Request {
+  id                 String        @id @default(uuid())
+  status             RequestStatus @default(ZAYAVENA)
+  requestType        RequestType   @default(NOVA_POLICA)
+
+  // Vehicle data (required for NOVA_POLICA, not needed for VNOSKA)
+  talonNumber        String?
+  registrationNumber String
+  engineCapacity     String?
+  powerKW            String?
+  purpose            String        @default("Лични нужди")
+  rightHandDrive     Boolean       @default(false)
+
+  // Owner data
+  ownerIdentifier    String?
+  ownerName          String?
+  ownerAddress       String?
+  ownerPhone         String?
+  ownerEmail         String?
+
+  // Installment options selected by agent
+  installments       Int[]         @default([])
+
+  // Offer / policy fields
+  stickerNumber      String?
+  greenCardNumber    String?
+  insuranceNumber    String?       // номер на застраховка (used by VNOSKA)
+  agentNote          String?       // note from agent at request creation
+  offerNote          String?       // note from agent when accepting offer (PRIETA_OFERTA)
+  cancellationNote   String?       // reason for cancellation (optional, set on OTKAZANA / OTKAZANA_OT_AGENT)
+
+  createdAt          DateTime      @default(now())
+  updatedAt          DateTime      @updatedAt
+
+  // Relations
+  agentId            String
+  agent              User          @relation("agentRequests", fields: [agentId], references: [id])
+  processedById      String?
+  processedBy        User?         @relation("processedRequests", fields: [processedById], references: [id])
+
+  images             RequestImage[]
+
+  @@index([agentId])
+  @@index([status])
+  @@index([requestType])
+  @@index([processedById])
+  @@map("requests")
+}
+
+model RequestImage {
+  id           String   @id @default(uuid())
+  requestId    String
+  path         String
+  originalName String
+  mimeType     String
+  size         Int
+  imageType    RequestImageType @default(photo)
+  uploadedAt   DateTime @default(now())
+
+  request      Request  @relation(fields: [requestId], references: [id], onDelete: Cascade)
+
+  @@index([requestId])
+  @@map("request_images")
+}
+
+// Insurance (Падежи) - Google Sheets integration
+model InsuranceSpreadsheet {
+  id            String   @id @default(uuid())
+  year          Int
+  spreadsheetId String
+  label         String
+  isArchived    Boolean  @default(false)
+  lastSyncedAt  DateTime?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  policies      InsurancePolicy[]
+
+  @@map("insurance_spreadsheets")
+}
+
+model InsurancePolicy {
+  id                  String   @id @default(uuid())
+  spreadsheetConfigId String
+  sheetMonth          String
+  policyNumber        String?
+  company             String?
+  ownerName           String?
+  registrationNumber  String
+  startDate           DateTime?
+  agent               String?
+  amount              Decimal?
+  expiryDate          DateTime?
+  sticker             String?
+  greenCard           String?
+  createdAt           DateTime @default(now())
+
+  spreadsheet         InsuranceSpreadsheet @relation(fields: [spreadsheetConfigId], references: [id], onDelete: Cascade)
+
+  @@index([registrationNumber])
+  @@index([expiryDate])
+  @@index([spreadsheetConfigId])
+  @@map("insurance_policies")
+}
+
+// ============== AGENT MAPPINGS ==============
+
+model AgentMapping {
+  id        String   @id @default(uuid())
+  agentName String   @unique
+  userId    String
+  createdAt DateTime @default(now())
+
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("agent_mappings")
+}
+
+// ============== RESOURCES ==============
+
+model ResourceSection {
+  id          String         @id @default(uuid())
+  name        String
+  description String?
+  order       Int            @default(0)
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+
+  items       ResourceItem[]
+
+  @@map("resource_sections")
+}
+
+model ResourceItem {
+  id           String          @id @default(uuid())
+  sectionId    String
+  type         ResourceItemType
+  title        String
+  description  String?
+  url          String?
+  filePath     String?
+  originalName String?
+  mimeType     String?
+  size         Int?
+  order        Int             @default(0)
+  createdAt    DateTime        @default(now())
+  updatedAt    DateTime        @updatedAt
+
+  section      ResourceSection @relation(fields: [sectionId], references: [id], onDelete: Cascade)
+
+  @@index([sectionId])
+  @@map("resource_items")
+}
+
+// ============== WEB PUSH ==============
+
+model PushSubscription {
+  id        String   @id @default(uuid())
+  userId    String
+  endpoint  String   @unique
+  p256dh    String
+  auth      String
+  createdAt DateTime @default(now())
+
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("push_subscriptions")
+}
+
+// ============== IN-APP NOTIFICATIONS ==============
+
+model Notification {
+  id               String   @id @default(uuid())
+  userId           String
+  title            String
+  body             String
+  variant          String   @default("info")
+  requestId        String?
+  requestType      String?
+  isAdminBroadcast Boolean  @default(false)
+  read             Boolean  @default(false)
+  createdAt        DateTime @default(now())
+
+  user             User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, read])
+  @@index([createdAt])
+  @@map("notifications")
+}
