@@ -1,0 +1,21 @@
+{
+  "moduleFileExtensions": ["js", "json", "ts"],
+  "rootDir": "..",
+  "testEnvironment": "node",
+  "testRegex": "test/integration/.*\\.integration\\.spec\\.ts$",
+  "transform": {
+    "^.+\\.(t|j)s$": ["ts-jest", {
+      "tsconfig": "tsconfig.json",
+      "diagnostics": false
+    }]
+  },
+  "transformIgnorePatterns": [
+    "node_modules/(?!(file-type|strtok3|token-types|peek-readable|uint8array-extras)/)"
+  ],
+  "moduleNameMapper": {
+    "^(\\.{1,2}/.*)\\.js$": "$1"
+  },
+  "setupFiles": ["./test/setup.ts"],
+  "testTimeout": 30000,
+  "maxWorkers": 1
+}
