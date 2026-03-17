@@ -1,0 +1,40 @@
+# dependencies
+node_modules
+
+# build
+dist
+
+# env
+.env
+.env.*
+!.env.example
+
+# IDE
+.vscode
+.idea
+
+# OS
+.DS_Store
+Thumbs.db
+nul
+
+# testing
+coverage
+
+# logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+# certificates
+*.pem
+
+# uploads (user-uploaded images)
+uploads/*
+!uploads/.gitkeep
+
+# Prisma generated
+/generated/prisma
+
+# misc
+*.tsbuildinfo
