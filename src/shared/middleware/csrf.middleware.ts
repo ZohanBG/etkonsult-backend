@@ -31,6 +31,7 @@ export class CsrfMiddleware implements NestMiddleware {
         secure: isProduction,
         sameSite: isProduction ? 'strict' : 'lax',
         path: '/',
+        ...(process.env.COOKIE_DOMAIN ? { domain: process.env.COOKIE_DOMAIN } : {}),
       });
     }
 
