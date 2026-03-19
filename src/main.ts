@@ -69,7 +69,7 @@ async function bootstrap() {
   app.enableCors({
     origin: configService.get<string>('CORS_ORIGIN'),
     credentials: true,
-    exposedHeaders: ['set-cookie'],
+    exposedHeaders: ['set-cookie', 'x-csrf-token'],
   });
 
   // Global prefix

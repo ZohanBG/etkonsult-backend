@@ -35,6 +35,9 @@ export class CsrfMiddleware implements NestMiddleware {
       });
     }
 
+    // Always expose the token in a response header so cross-subdomain JS can read it
+    res.setHeader('X-CSRF-Token', cookieToken);
+
     // Safe methods don't need CSRF validation
     if (SAFE_METHODS.has(req.method)) {
       return next();
