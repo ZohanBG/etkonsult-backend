@@ -4,8 +4,11 @@ import * as fs from 'fs/promises';
 import * as path from 'path';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { fileTypeFromBuffer } from 'file-type';
-import * as pdfPoppler from 'pdf-poppler';
+import { execFile } from 'child_process';
+import { promisify } from 'util';
 import * as os from 'os';
+
+const execFileAsync = promisify(execFile);
 
 export interface ProcessedImage {
   path: string;
@@ -80,18 +83,17 @@ export class UploadsService {
       // Write PDF to temp file
       await fs.writeFile(tempPdfPath, pdfBuffer);
 
-      // Convert first page to PNG
-      const opts = {
-        format: 'png' as const,
-        out_dir: tempDir,
-        out_prefix: path.basename(tempOutputBase),
-        page: 1,
-        scale: 2048, // Good resolution for OCR
-      };
+      // Convert first page to PNG using system pdftoppm (poppler-utils)
+      await execFileAsync('pdftoppm', [
+        '-png',
+        '-r', '200',
+        '-f', '1',
+        '-l', '1',
+        tempPdfPath,
+        tempOutputBase,
+      ]);
 
-      await pdfPoppler.convert(tempPdfPath, opts);
-
-      // Read the generated image (pdf-poppler adds -1.png for first page)
+      // pdftoppm outputs files like: base-1.png
       const outputPath = `${tempOutputBase}-1.png`;
       const imageBuffer = await fs.readFile(outputPath);
 

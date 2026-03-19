@@ -86,9 +86,6 @@ importers:
       nodemailer:
         specifier: ^7.0.13
         version: 7.0.13
-      pdf-poppler:
-        specifier: ^0.2.3
-        version: 0.2.3
       pg:
         specifier: ^8.20.0
         version: 8.20.0
@@ -3393,9 +3390,6 @@ packages:
 
   pathe@2.0.3:
     resolution: {integrity: sha512-WUjGcAqP1gQacoQe+OBJsFA7Ld4DyXuUIjZ5cc75cLHvJ7dtNsTugphxIADwspS+AraAUePCKrSVtPLFj/F88w==}
-
-  pdf-poppler@0.2.3:
-    resolution: {integrity: sha512-nUczP3M/W4c8/3F6il0LmkxkF33qTKQyxeBmUnPbQLxxhtBX42zfpZqnLysomvMdb756qVR7n5kvNr+LzisXQw==}
 
   perfect-debounce@1.0.0:
     resolution: {integrity: sha512-xCy9V055GLEqoFaHoC1SoLIaLmWctgCUaBaWxDZ7/Zx4CTyX7cJQLJOok/orfjZAh9kEYpjJa4d0KcJmCbctZA==}
@@ -7821,8 +7815,6 @@ snapshots:
   path-type@4.0.0: {}
 
   pathe@2.0.3: {}
-
-  pdf-poppler@0.2.3: {}
 
   perfect-debounce@1.0.0: {}
 

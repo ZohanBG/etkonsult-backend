@@ -64,7 +64,6 @@
     "helmet": "^8.1.0",
     "multer": "^2.1.1",
     "nodemailer": "^7.0.13",
-    "pdf-poppler": "^0.2.3",
     "pg": "^8.20.0",
     "prisma": "^7.5.0",
     "qrcode": "^1.5.4",
