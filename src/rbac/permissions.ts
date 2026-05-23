@@ -48,6 +48,13 @@ export const PERMISSIONS = {
   RESOURCE_READ: 'resource:read',
   RESOURCE_MANAGE: 'resource:manage',
 
+  // Client documents (Документи на клиенти) permissions
+  CLIENT_DOCUMENTS_READ: 'client_documents:read',
+  CLIENT_DOCUMENTS_MANAGE: 'client_documents:manage',
+
+  // Vehicle documents (ГТП / Винетка) permissions
+  VEHICLE_DOCUMENTS_MANAGE: 'vehicle_documents:manage',
+
   // Menu access permissions (for UI visibility)
   MENU_HOME: 'menu:home',
   MENU_VEHICLE_INSERT: 'menu:vehicle_insert',
@@ -63,6 +70,7 @@ export const PERMISSIONS = {
   MENU_ALL_REQUESTS: 'menu:all_requests',
   MENU_RESOURCES: 'menu:resources',
   MENU_NOTIFICATIONS: 'menu:notifications',
+  MENU_CLIENT_DOCUMENTS: 'menu:client_documents',
 } as const;
 
 export type Permission = (typeof PERMISSIONS)[keyof typeof PERMISSIONS];
@@ -132,6 +140,12 @@ export const PERMISSION_GROUPS = {
     PERMISSIONS.MENU_ALL_REQUESTS,
     PERMISSIONS.MENU_RESOURCES,
     PERMISSIONS.MENU_INSURANCE_AGENTS,
+    PERMISSIONS.MENU_CLIENT_DOCUMENTS,
+  ],
+  CLIENT_DOCUMENTS_FULL: [
+    PERMISSIONS.CLIENT_DOCUMENTS_READ,
+    PERMISSIONS.CLIENT_DOCUMENTS_MANAGE,
+    PERMISSIONS.MENU_CLIENT_DOCUMENTS,
   ],
   BASIC_MENUS: [
     PERMISSIONS.MENU_HOME,
@@ -164,6 +178,8 @@ export const DEFAULT_ROLES = {
       ...PERMISSION_GROUPS.BASIC_MENUS,
       ...PERMISSION_GROUPS.REQUEST_STAFF,
       ...PERMISSION_GROUPS.INSURANCE_ACCESS,
+      ...PERMISSION_GROUPS.CLIENT_DOCUMENTS_FULL,
+      PERMISSIONS.VEHICLE_DOCUMENTS_MANAGE,
       PERMISSIONS.RESOURCE_READ,
       PERMISSIONS.MENU_ALL_REQUESTS,
       PERMISSIONS.MENU_INSURANCE,
@@ -249,4 +265,8 @@ export const PERMISSION_LABELS: Record<Permission, { label: string; description:
   [PERMISSIONS.RESOURCE_MANAGE]: { label: 'Управление на ресурси', description: 'Позволява създаване, редактиране и изтриване на ресурси', type: 'api', apiEndpoint: 'POST /api/resources/sections' },
   [PERMISSIONS.MENU_RESOURCES]: { label: 'Ресурси', description: 'Показва страницата с ресурси в менюто', type: 'page' },
   [PERMISSIONS.MENU_NOTIFICATIONS]: { label: 'Нотификации', description: 'Показва страницата с нотификации в менюто', type: 'page' },
+  [PERMISSIONS.CLIENT_DOCUMENTS_READ]: { label: 'Преглед на документи на клиенти', description: 'Позволява преглед на клиенти и техните документи', type: 'api', apiEndpoint: 'GET /api/client-documents' },
+  [PERMISSIONS.CLIENT_DOCUMENTS_MANAGE]: { label: 'Управление на документи на клиенти', description: 'Позволява създаване, редактиране и изтриване на клиенти, директории и документи', type: 'api', apiEndpoint: 'POST /api/client-documents' },
+  [PERMISSIONS.MENU_CLIENT_DOCUMENTS]: { label: 'Документи на клиенти', description: 'Показва страницата с документи на клиенти в менюто', type: 'page' },
+  [PERMISSIONS.VEHICLE_DOCUMENTS_MANAGE]: { label: 'Управление на ГТП и Винетки', description: 'Позволява ръчно въвеждане/редакция/изтриване на ГТП и Винетка периоди', type: 'api', apiEndpoint: 'POST /api/vehicle-documents' },
 };

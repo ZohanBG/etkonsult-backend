@@ -7,6 +7,13 @@ import { CreateSpreadsheetDto, ExpiryFilterDto, CreateAgentMappingDto, BulkAgent
 
 export type ExpiryStatusType = 'expired' | 'recently_expired' | 'expiring_soon' | 'active' | 'unknown';
 
+export interface VehicleDocumentSnapshot {
+  id: string | null;
+  validFrom: Date | null;
+  validTo: Date | null;
+  status: ExpiryStatusType;
+}
+
 export interface ExpiryItem {
   registrationNumber: string;
   ownerName: string | null;
@@ -18,6 +25,21 @@ export interface ExpiryItem {
   status: ExpiryStatusType;
   vehicleId: string | null;
   installmentHint: string | null;
+  gtp: VehicleDocumentSnapshot | null;
+  vignette: VehicleDocumentSnapshot | null;
+}
+
+function computeDocStatus(validTo: Date | null): ExpiryStatusType {
+  if (!validTo) return 'unknown';
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const target = new Date(validTo.getFullYear(), validTo.getMonth(), validTo.getDate());
+  const msPerDay = 24 * 60 * 60 * 1000;
+  const diffDays = Math.floor((target.getTime() - today.getTime()) / msPerDay);
+  if (diffDays < -15) return 'expired';
+  if (diffDays < 0) return 'recently_expired';
+  if (diffDays <= 7) return 'expiring_soon';
+  return 'active';
 }
 
 /**
@@ -273,6 +295,18 @@ export class InsuranceService {
       conditions.push(Prisma.sql`AND LOWER(lp.agent) LIKE ${agentPattern}`);
     }
 
+    if (filters.agentNames) {
+      const list = filters.agentNames
+        .split(',')
+        .map((s) => s.trim().toLowerCase())
+        .filter(Boolean);
+      if (list.length > 0) {
+        conditions.push(Prisma.sql`AND LOWER(lp.agent) IN (${Prisma.join(list)})`);
+      } else {
+        conditions.push(Prisma.sql`AND FALSE`);
+      }
+    }
+
     if (registrationNumber) {
       const regPattern = `%${registrationNumber.toLowerCase()}%`;
       conditions.push(Prisma.sql`AND LOWER(lp."registrationNumber") LIKE ${regPattern}`);
@@ -371,12 +405,15 @@ export class InsuranceService {
       LIMIT ${limit} OFFSET ${offset}
     `);
 
-    // Count query
+    // Count query — must include any column referenced by whereClause
     const countResult = await this.prisma.$queryRaw<Array<{ count: bigint }>>(Prisma.sql`
       WITH latest_policies AS (
         SELECT DISTINCT ON (ip."registrationNumber")
           ip."registrationNumber",
           ip."ownerName",
+          ip."policyNumber",
+          ip.company,
+          ip.agent,
           ip."expiryDate",
           CASE
             WHEN ip."expiryDate" IS NULL THEN 'unknown'
@@ -409,6 +446,8 @@ export class InsuranceService {
         status: row.status as ExpiryStatusType,
         vehicleId: row.vehicleId,
         installmentHint: buildInstallmentHint(row.installmentPos, row.installmentTotal, row.spanDays),
+        gtp: null as VehicleDocumentSnapshot | null,
+        vignette: null as VehicleDocumentSnapshot | null,
       })),
       total,
       page,
@@ -466,6 +505,421 @@ export class InsuranceService {
       active: Number(row?.active ?? 0),
       unknown: Number(row?.unknown ?? 0),
     };
+  }
+
+  // ────────────────────────────────────────────────────────────────────────
+  // ГТП / Винетка: docType-aware listing and stats
+  // ────────────────────────────────────────────────────────────────────────
+
+  /** Latest GTP record per registration number, case-insensitive lookup */
+  private async getLatestGtpForRegs(
+    regs: string[],
+  ): Promise<Map<string, VehicleDocumentSnapshot>> {
+    if (regs.length === 0) return new Map();
+    const upperRegs = Array.from(new Set(regs.map((r) => r.toUpperCase())));
+    const items = await this.prisma.technicalInspection.findMany({
+      where: { registrationNumber: { in: upperRegs } },
+      orderBy: [{ registrationNumber: 'asc' }, { validTo: 'desc' }],
+      select: { id: true, registrationNumber: true, validFrom: true, validTo: true },
+    });
+    const out = new Map<string, VehicleDocumentSnapshot>();
+    for (const it of items) {
+      const key = it.registrationNumber.toUpperCase();
+      if (!out.has(key)) {
+        out.set(key, {
+          id: it.id,
+          validFrom: it.validFrom,
+          validTo: it.validTo,
+          status: computeDocStatus(it.validTo),
+        });
+      }
+    }
+    return out;
+  }
+
+  /** Latest Vignette record per registration number, case-insensitive lookup */
+  private async getLatestVignetteForRegs(
+    regs: string[],
+  ): Promise<Map<string, VehicleDocumentSnapshot>> {
+    if (regs.length === 0) return new Map();
+    const upperRegs = Array.from(new Set(regs.map((r) => r.toUpperCase())));
+    const items = await this.prisma.vignette.findMany({
+      where: { registrationNumber: { in: upperRegs } },
+      orderBy: [{ registrationNumber: 'asc' }, { validTo: 'desc' }],
+      select: { id: true, registrationNumber: true, validFrom: true, validTo: true },
+    });
+    const out = new Map<string, VehicleDocumentSnapshot>();
+    for (const it of items) {
+      const key = it.registrationNumber.toUpperCase();
+      if (!out.has(key)) {
+        out.set(key, {
+          id: it.id,
+          validFrom: it.validFrom,
+          validTo: it.validTo,
+          status: computeDocStatus(it.validTo),
+        });
+      }
+    }
+    return out;
+  }
+
+  /**
+   * List expiries driven by GTP or Vignette records.
+   * Latest record per reg is the "primary" row; insurance/the-other-type are looked up for display columns.
+   */
+  private async getExpiriesByDoc(
+    kind: 'GTP' | 'VIGNETTE',
+    filters: ExpiryFilterDto,
+  ): Promise<ExpiryListResponse> {
+    const page = Math.max(1, parseInt(filters.page || '1', 10) || 1);
+    const limit = Math.min(100, Math.max(1, parseInt(filters.limit || '20', 10) || 20));
+    const offset = (page - 1) * limit;
+    const status = filters.status || 'all';
+    const search = filters.search?.trim().toUpperCase() || '';
+    const reg = filters.registrationNumber?.trim().toUpperCase() || '';
+    const owner = filters.ownerName?.trim() || '';
+
+    const table = kind === 'GTP' ? 'technical_inspections' : 'vignettes';
+
+    // Special case: status='unknown' for GTP/Винетка means "no record set"
+    // → switch to a different query that lists insurance regs WITHOUT this doc
+    if (status === 'unknown') {
+      return this.getMissingDocsList(kind, filters);
+    }
+
+    // Status filter expressed as a SQL condition on validTo
+    let statusCondition = Prisma.sql``;
+    if (status === 'expired') {
+      statusCondition = Prisma.sql`AND lp."validTo" < CURRENT_DATE - INTERVAL '15 days'`;
+    } else if (status === 'recently_expired') {
+      statusCondition = Prisma.sql`AND lp."validTo" >= CURRENT_DATE - INTERVAL '15 days' AND lp."validTo" < CURRENT_DATE`;
+    } else if (status === 'expiring_soon') {
+      statusCondition = Prisma.sql`AND lp."validTo" >= CURRENT_DATE AND lp."validTo" <= CURRENT_DATE + INTERVAL '7 days'`;
+    } else if (status === 'active') {
+      statusCondition = Prisma.sql`AND lp."validTo" > CURRENT_DATE + INTERVAL '7 days'`;
+    }
+
+    const searchCondition = search
+      ? Prisma.sql`AND UPPER(lp."registrationNumber") LIKE ${'%' + search + '%'}`
+      : Prisma.sql``;
+    const regCondition = reg
+      ? Prisma.sql`AND UPPER(lp."registrationNumber") LIKE ${'%' + reg + '%'}`
+      : Prisma.sql``;
+
+    // CTE: latest doc per registrationNumber, then filter
+    const tableIdent = Prisma.raw(`"${table}"`);
+    const rows = await this.prisma.$queryRaw<Array<{
+      id: string;
+      registrationNumber: string;
+      validFrom: Date;
+      validTo: Date;
+    }>>(Prisma.sql`
+      WITH latest_docs AS (
+        SELECT DISTINCT ON ("registrationNumber")
+          id, "registrationNumber", "validFrom", "validTo"
+        FROM ${tableIdent}
+        ORDER BY "registrationNumber", "validTo" DESC
+      )
+      SELECT lp.*
+      FROM latest_docs lp
+      WHERE 1=1 ${statusCondition} ${searchCondition} ${regCondition}
+      ORDER BY lp."validTo" ASC NULLS LAST
+      LIMIT ${limit} OFFSET ${offset}
+    `);
+
+    const countResult = await this.prisma.$queryRaw<Array<{ count: bigint }>>(Prisma.sql`
+      WITH latest_docs AS (
+        SELECT DISTINCT ON ("registrationNumber")
+          "registrationNumber", "validTo"
+        FROM ${tableIdent}
+        ORDER BY "registrationNumber", "validTo" DESC
+      )
+      SELECT COUNT(*) AS count
+      FROM latest_docs lp
+      WHERE 1=1 ${statusCondition} ${searchCondition} ${regCondition}
+    `);
+    const total = Number(countResult[0]?.count ?? 0);
+
+    // Enrich with latest insurance + the other type
+    const regs = rows.map((r) => r.registrationNumber);
+    const upperRegs = Array.from(new Set(regs.map((r) => r.toUpperCase())));
+
+    const [insuranceRows, vehicleRows, gtpMap, vignetteMap] = await Promise.all([
+      upperRegs.length === 0
+        ? []
+        : this.prisma.$queryRaw<Array<{
+            registrationNumber: string;
+            ownerName: string | null;
+            policyNumber: string | null;
+            company: string | null;
+            startDate: Date | null;
+            expiryDate: Date | null;
+            agent: string | null;
+          }>>(Prisma.sql`
+            SELECT DISTINCT ON ("registrationNumber")
+              "registrationNumber", "ownerName", "policyNumber", company,
+              "startDate", "expiryDate", agent
+            FROM insurance_policies
+            WHERE UPPER("registrationNumber") IN (${Prisma.join(upperRegs)})
+            ORDER BY "registrationNumber", "expiryDate" DESC NULLS LAST, "createdAt" DESC
+          `),
+      upperRegs.length === 0
+        ? []
+        : this.prisma.vehicle.findMany({
+            where: { registrationNumber: { in: upperRegs } },
+            select: { id: true, registrationNumber: true },
+          }),
+      kind === 'GTP' ? Promise.resolve(new Map<string, VehicleDocumentSnapshot>()) : this.getLatestGtpForRegs(regs),
+      kind === 'VIGNETTE' ? Promise.resolve(new Map<string, VehicleDocumentSnapshot>()) : this.getLatestVignetteForRegs(regs),
+    ]);
+
+    const insuranceByReg = new Map<string, typeof insuranceRows[number]>();
+    for (const ir of insuranceRows) {
+      insuranceByReg.set(ir.registrationNumber.toUpperCase(), ir);
+    }
+    const vehicleByReg = new Map<string, string>();
+    for (const v of vehicleRows) vehicleByReg.set(v.registrationNumber.toUpperCase(), v.id);
+
+    let data: ExpiryItem[] = rows.map((row) => {
+      const upper = row.registrationNumber.toUpperCase();
+      const ins = insuranceByReg.get(upper);
+      const primarySnap: VehicleDocumentSnapshot = {
+        id: row.id,
+        validFrom: row.validFrom,
+        validTo: row.validTo,
+        status: computeDocStatus(row.validTo),
+      };
+      const gtp = kind === 'GTP' ? primarySnap : gtpMap.get(upper) ?? null;
+      const vignette = kind === 'VIGNETTE' ? primarySnap : vignetteMap.get(upper) ?? null;
+      return {
+        registrationNumber: row.registrationNumber,
+        ownerName: ins?.ownerName ?? null,
+        policyNumber: ins?.policyNumber ?? null,
+        company: ins?.company ?? null,
+        startDate: row.validFrom,
+        expiryDate: row.validTo,
+        agent: ins?.agent ?? null,
+        status: primarySnap.status,
+        vehicleId: vehicleByReg.get(upper) ?? null,
+        installmentHint: null,
+        gtp,
+        vignette,
+      };
+    });
+
+    if (owner) {
+      const ownerLower = owner.toLowerCase();
+      data = data.filter((r) => (r.ownerName ?? '').toLowerCase().includes(ownerLower));
+    }
+
+    return { data, total, page, totalPages: Math.ceil(total / limit) || 1 };
+  }
+
+  /**
+   * List insurance-known registrations that DON'T have a GTP/Винетка record yet.
+   * Used when the user selects status='unknown' on the GTP/Винетка tab.
+   */
+  private async getMissingDocsList(
+    kind: 'GTP' | 'VIGNETTE',
+    filters: ExpiryFilterDto,
+  ): Promise<ExpiryListResponse> {
+    const currentYear = new Date().getFullYear();
+    const cutoffYear = currentYear - 2;
+    const page = Math.max(1, parseInt(filters.page || '1', 10) || 1);
+    const limit = Math.min(100, Math.max(1, parseInt(filters.limit || '20', 10) || 20));
+    const offset = (page - 1) * limit;
+    const search = filters.search?.trim().toUpperCase() || '';
+    const reg = filters.registrationNumber?.trim().toUpperCase() || '';
+    const owner = filters.ownerName?.trim() || '';
+
+    const table = kind === 'GTP' ? 'technical_inspections' : 'vignettes';
+    const tableIdent = Prisma.raw(`"${table}"`);
+
+    const searchCondition = search
+      ? Prisma.sql`AND (UPPER(lp."registrationNumber") LIKE ${'%' + search + '%'} OR UPPER(lp."ownerName") LIKE ${'%' + search + '%'})`
+      : Prisma.sql``;
+    const regCondition = reg
+      ? Prisma.sql`AND UPPER(lp."registrationNumber") LIKE ${'%' + reg + '%'}`
+      : Prisma.sql``;
+    const ownerCondition = owner
+      ? Prisma.sql`AND LOWER(lp."ownerName") LIKE ${'%' + owner.toLowerCase() + '%'}`
+      : Prisma.sql``;
+
+    const rows = await this.prisma.$queryRaw<Array<{
+      registrationNumber: string;
+      ownerName: string | null;
+      policyNumber: string | null;
+      company: string | null;
+      startDate: Date | null;
+      expiryDate: Date | null;
+      agent: string | null;
+    }>>(Prisma.sql`
+      WITH latest_policies AS (
+        SELECT DISTINCT ON (ip."registrationNumber")
+          ip."registrationNumber",
+          ip."ownerName",
+          ip."policyNumber",
+          ip.company,
+          ip."startDate",
+          ip."expiryDate",
+          ip.agent
+        FROM insurance_policies ip
+        INNER JOIN insurance_spreadsheets isp ON isp.id = ip."spreadsheetConfigId"
+        WHERE isp.year >= ${cutoffYear}
+        ORDER BY ip."registrationNumber", ip."expiryDate" DESC NULLS LAST, ip."createdAt" DESC
+      ),
+      have_doc AS (
+        SELECT DISTINCT UPPER("registrationNumber") AS reg_upper FROM ${tableIdent}
+      )
+      SELECT lp.*
+      FROM latest_policies lp
+      LEFT JOIN have_doc h ON h.reg_upper = UPPER(lp."registrationNumber")
+      WHERE h.reg_upper IS NULL ${searchCondition} ${regCondition} ${ownerCondition}
+      ORDER BY lp."registrationNumber"
+      LIMIT ${limit} OFFSET ${offset}
+    `);
+
+    const countResult = await this.prisma.$queryRaw<Array<{ count: bigint }>>(Prisma.sql`
+      WITH latest_policies AS (
+        SELECT DISTINCT ON (ip."registrationNumber")
+          ip."registrationNumber",
+          ip."ownerName"
+        FROM insurance_policies ip
+        INNER JOIN insurance_spreadsheets isp ON isp.id = ip."spreadsheetConfigId"
+        WHERE isp.year >= ${cutoffYear}
+        ORDER BY ip."registrationNumber", ip."expiryDate" DESC NULLS LAST, ip."createdAt" DESC
+      ),
+      have_doc AS (
+        SELECT DISTINCT UPPER("registrationNumber") AS reg_upper FROM ${tableIdent}
+      )
+      SELECT COUNT(*) AS count
+      FROM latest_policies lp
+      LEFT JOIN have_doc h ON h.reg_upper = UPPER(lp."registrationNumber")
+      WHERE h.reg_upper IS NULL ${searchCondition} ${regCondition} ${ownerCondition}
+    `);
+    const total = Number(countResult[0]?.count ?? 0);
+
+    // Enrich with vehicleId + the OTHER doc snapshot
+    const regs = rows.map((r) => r.registrationNumber);
+    const upperRegs = Array.from(new Set(regs.map((r) => r.toUpperCase())));
+    const [vehicleRows, otherDocMap] = await Promise.all([
+      upperRegs.length === 0
+        ? []
+        : this.prisma.vehicle.findMany({
+            where: { registrationNumber: { in: upperRegs } },
+            select: { id: true, registrationNumber: true },
+          }),
+      kind === 'GTP' ? this.getLatestVignetteForRegs(regs) : this.getLatestGtpForRegs(regs),
+    ]);
+    const vehicleByReg = new Map<string, string>();
+    for (const v of vehicleRows) vehicleByReg.set(v.registrationNumber.toUpperCase(), v.id);
+
+    const data: ExpiryItem[] = rows.map((row) => {
+      const upper = row.registrationNumber.toUpperCase();
+      const missingSnap: VehicleDocumentSnapshot = {
+        id: null, validFrom: null, validTo: null, status: 'unknown',
+      };
+      return {
+        registrationNumber: row.registrationNumber,
+        ownerName: row.ownerName,
+        policyNumber: row.policyNumber,
+        company: row.company,
+        startDate: null,
+        expiryDate: null,
+        agent: row.agent,
+        status: 'unknown',
+        vehicleId: vehicleByReg.get(upper) ?? null,
+        installmentHint: null,
+        gtp: kind === 'GTP' ? missingSnap : otherDocMap.get(upper) ?? null,
+        vignette: kind === 'VIGNETTE' ? missingSnap : otherDocMap.get(upper) ?? null,
+      };
+    });
+
+    return { data, total, page, totalPages: Math.ceil(total / limit) || 1 };
+  }
+
+  /** Stats counter for GTP/Vignette docs (latest per reg) */
+  private async getDocStats(kind: 'GTP' | 'VIGNETTE'): Promise<ExpiryStats> {
+    const currentYear = new Date().getFullYear();
+    const cutoffYear = currentYear - 2;
+    const table = kind === 'GTP' ? 'technical_inspections' : 'vignettes';
+    const tableIdent = Prisma.raw(`"${table}"`);
+    const result = await this.prisma.$queryRaw<Array<{
+      total: bigint;
+      expired: bigint;
+      recently_expired: bigint;
+      expiring_soon: bigint;
+      active: bigint;
+      missing: bigint;
+    }>>(Prisma.sql`
+      WITH latest_docs AS (
+        SELECT DISTINCT ON ("registrationNumber")
+          "registrationNumber",
+          "validTo",
+          CASE
+            WHEN "validTo" < CURRENT_DATE - INTERVAL '15 days' THEN 'expired'
+            WHEN "validTo" < CURRENT_DATE THEN 'recently_expired'
+            WHEN "validTo" <= CURRENT_DATE + INTERVAL '7 days' THEN 'expiring_soon'
+            ELSE 'active'
+          END AS status
+        FROM ${tableIdent}
+        ORDER BY "registrationNumber", "validTo" DESC
+      ),
+      insurance_regs AS (
+        SELECT DISTINCT UPPER(ip."registrationNumber") AS reg_upper
+        FROM insurance_policies ip
+        INNER JOIN insurance_spreadsheets isp ON isp.id = ip."spreadsheetConfigId"
+        WHERE isp.year >= ${cutoffYear}
+      ),
+      doc_regs AS (
+        SELECT DISTINCT UPPER("registrationNumber") AS reg_upper FROM ${tableIdent}
+      )
+      SELECT
+        (SELECT COUNT(*) FROM latest_docs)
+          + (SELECT COUNT(*) FROM insurance_regs ir LEFT JOIN doc_regs dr ON dr.reg_upper = ir.reg_upper WHERE dr.reg_upper IS NULL) AS total,
+        (SELECT COUNT(*) FROM latest_docs WHERE status = 'expired') AS expired,
+        (SELECT COUNT(*) FROM latest_docs WHERE status = 'recently_expired') AS recently_expired,
+        (SELECT COUNT(*) FROM latest_docs WHERE status = 'expiring_soon') AS expiring_soon,
+        (SELECT COUNT(*) FROM latest_docs WHERE status = 'active') AS active,
+        (SELECT COUNT(*) FROM insurance_regs ir LEFT JOIN doc_regs dr ON dr.reg_upper = ir.reg_upper WHERE dr.reg_upper IS NULL) AS missing
+    `);
+    const row = result[0];
+    return {
+      total: Number(row?.total ?? 0),
+      expired: Number(row?.expired ?? 0),
+      recentlyExpired: Number(row?.recently_expired ?? 0),
+      expiringSoon: Number(row?.expiring_soon ?? 0),
+      active: Number(row?.active ?? 0),
+      unknown: Number(row?.missing ?? 0),
+    };
+  }
+
+  /** Public dispatcher for the new toggle */
+  async getExpiriesForDocType(filters: ExpiryFilterDto): Promise<ExpiryListResponse> {
+    const docType = filters.docType || 'INSURANCE';
+    if (docType === 'GTP') return this.getExpiriesByDoc('GTP', filters);
+    if (docType === 'VIGNETTE') return this.getExpiriesByDoc('VIGNETTE', filters);
+    // INSURANCE — call existing, then enrich with the other 2 doc types
+    const base = await this.getExpiries(filters);
+    const regs = base.data.map((r) => r.registrationNumber);
+    const [gtpMap, vignetteMap] = await Promise.all([
+      this.getLatestGtpForRegs(regs),
+      this.getLatestVignetteForRegs(regs),
+    ]);
+    return {
+      ...base,
+      data: base.data.map((r) => ({
+        ...r,
+        gtp: gtpMap.get(r.registrationNumber.toUpperCase()) ?? null,
+        vignette: vignetteMap.get(r.registrationNumber.toUpperCase()) ?? null,
+      })),
+    };
+  }
+
+  async getStatsForDocType(docType: 'INSURANCE' | 'GTP' | 'VIGNETTE'): Promise<ExpiryStats> {
+    if (docType === 'GTP') return this.getDocStats('GTP');
+    if (docType === 'VIGNETTE') return this.getDocStats('VIGNETTE');
+    return this.getExpiryStats();
   }
 
   /**
@@ -638,6 +1092,18 @@ export class InsuranceService {
       conditions.push(Prisma.sql`AND LOWER(lp.agent) LIKE ${agentPattern}`);
     }
 
+    if (filters.agentNames) {
+      const list = filters.agentNames
+        .split(',')
+        .map((s) => s.trim().toLowerCase())
+        .filter(Boolean);
+      if (list.length > 0) {
+        conditions.push(Prisma.sql`AND LOWER(lp.agent) IN (${Prisma.join(list)})`);
+      } else {
+        conditions.push(Prisma.sql`AND FALSE`);
+      }
+    }
+
     if (registrationNumber) {
       const regPattern = `%${registrationNumber.toLowerCase()}%`;
       conditions.push(Prisma.sql`AND LOWER(lp."registrationNumber") LIKE ${regPattern}`);
@@ -741,6 +1207,9 @@ export class InsuranceService {
         SELECT DISTINCT ON (ip."registrationNumber")
           ip."registrationNumber",
           ip."ownerName",
+          ip."policyNumber",
+          ip.company,
+          ip.agent,
           ip."expiryDate",
           CASE
             WHEN ip."expiryDate" IS NULL THEN 'unknown'
@@ -773,6 +1242,8 @@ export class InsuranceService {
         status: row.status as ExpiryStatusType,
         vehicleId: row.vehicleId,
         installmentHint: buildInstallmentHint(row.installmentPos, row.installmentTotal, row.spanDays),
+        gtp: null as VehicleDocumentSnapshot | null,
+        vignette: null as VehicleDocumentSnapshot | null,
       })),
       total,
       page,

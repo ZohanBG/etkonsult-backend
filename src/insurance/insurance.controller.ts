@@ -48,8 +48,9 @@ export class InsuranceController {
   // =================== Agent Mapping ===================
 
   @Get('agent-names')
-  @RequirePermissions(PERMISSIONS.INSURANCE_MANAGE)
+  @RequirePermissions(PERMISSIONS.INSURANCE_READ)
   async getUniqueAgentNames() {
+    // Staff/admin only — agents must not enumerate other agents
     return this.insuranceService.getUniqueAgentNames();
   }
 
@@ -118,16 +119,20 @@ export class InsuranceController {
 
   @Get('stats')
   @RequirePermissions(PERMISSIONS.INSURANCE_READ)
-  async getStats(@CurrentUser() user: CurrentUserData) {
+  async getStats(
+    @CurrentUser() user: CurrentUserData,
+    @Query('docType') docType?: string,
+  ) {
     await this.assertNotAgentOnly(user.userId);
-    return this.insuranceService.getExpiryStats();
+    const dt = docType === 'GTP' || docType === 'VIGNETTE' ? docType : 'INSURANCE';
+    return this.insuranceService.getStatsForDocType(dt);
   }
 
   @Get('expiries')
   @RequirePermissions(PERMISSIONS.INSURANCE_READ)
   async getExpiries(@CurrentUser() user: CurrentUserData, @Query() filters: ExpiryFilterDto) {
     await this.assertNotAgentOnly(user.userId);
-    return this.insuranceService.getExpiries(filters);
+    return this.insuranceService.getExpiriesForDocType(filters);
   }
 
   @Get('vehicle/:regNumber/history')

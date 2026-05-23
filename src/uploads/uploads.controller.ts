@@ -1,9 +1,11 @@
 import {
   Controller,
   Post,
+  Patch,
   Delete,
   Get,
   Param,
+  Body,
   UseGuards,
   UseInterceptors,
   UploadedFiles,
@@ -70,5 +72,13 @@ export class UploadsController {
   @Audit({ action: 'DELETE_IMAGE', entityType: 'Vehicle' })
   async deleteImage(@Param('imageId') imageId: string) {
     await this.uploadsService.deleteVehicleImage(imageId);
+  }
+
+  @Patch('images/:imageId/rotation')
+  async setImageRotation(
+    @Param('imageId') imageId: string,
+    @Body() body: { rotation: number },
+  ) {
+    return this.uploadsService.setVehicleImageRotation(imageId, body.rotation);
   }
 }

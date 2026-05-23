@@ -357,6 +357,15 @@ export class RequestsService {
     }
   }
 
+  async setRequestImageRotation(imageId: string, rotation: number) {
+    const normalized = ((Math.round(rotation) % 360) + 360) % 360;
+    return this.prisma.requestImage.update({
+      where: { id: imageId },
+      data: { rotation: normalized },
+      select: { id: true, rotation: true },
+    });
+  }
+
   /**
    * Copy request photo images to the matching vehicle (looked up by registrationNumber).
    * Returns an error string or null on success.

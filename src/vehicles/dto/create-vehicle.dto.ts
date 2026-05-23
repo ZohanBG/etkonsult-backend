@@ -7,8 +7,8 @@ export class CreateVehicleDto {
   talonNumber!: string;
 
   @IsString()
-  @Matches(/^[A-ZА-Я]{1,2}\d{4}[A-ZА-Я]{2}$/i, {
-    message: 'Невалиден регистрационен номер (пример: СА1234АВ)',
+  @Matches(/^(?:[A-ZА-Я]{1,2}\d{4}[A-ZА-Я]{1,2}|[A-ZА-Я]{2}\d{3,7})$/i, {
+    message: 'Невалиден регистрационен номер (пример: СА1234АВ — кола, СА1234А — мотор, СА12345 — трактор)',
   })
   registrationNumber!: string;
 

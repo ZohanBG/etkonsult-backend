@@ -33,6 +33,10 @@ async function bootstrap() {
   expressApp.set('trust proxy', 'loopback');
 
   // Security headers with Helmet
+  const corsOrigin = configService.get<string>('CORS_ORIGIN');
+  const frameAncestors = ["'self'"];
+  if (corsOrigin) frameAncestors.push(corsOrigin);
+
   app.use(
     helmet({
       contentSecurityPolicy: {
@@ -46,6 +50,7 @@ async function bootstrap() {
           objectSrc: ["'none'"],
           mediaSrc: ["'self'"],
           frameSrc: ["'self'"],
+          frameAncestors,
         },
       },
       crossOriginEmbedderPolicy: false, // Disable for image uploads

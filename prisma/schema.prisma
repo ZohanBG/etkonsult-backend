@@ -53,6 +53,10 @@ model User {
   agentMappings     AgentMapping[]
   pushSubscriptions PushSubscription[]
   notifications     Notification[]
+  createdClientDirectories ClientDirectory[]
+  uploadedClientDocuments  ClientDocument[]
+  createdTechnicalInspections TechnicalInspection[]
+  createdVignettes            Vignette[]
 
   @@map("users")
 }
@@ -158,9 +162,44 @@ model Owner {
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
 
-  vehicles   Vehicle[]
+  vehicles          Vehicle[]
+  clientDirectories ClientDirectory[]
 
   @@map("owners")
+}
+
+model ClientDirectory {
+  id          String   @id @default(uuid())
+  ownerId     String
+  name        String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  createdById String
+
+  owner     Owner            @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  createdBy User             @relation(fields: [createdById], references: [id])
+  documents ClientDocument[]
+
+  @@index([ownerId])
+  @@map("client_directories")
+}
+
+model ClientDocument {
+  id           String   @id @default(uuid())
+  directoryId  String
+  path         String
+  originalName String
+  mimeType     String
+  size         Int
+  rotation     Int      @default(0)
+  uploadedAt   DateTime @default(now())
+  uploadedById String
+
+  directory  ClientDirectory @relation(fields: [directoryId], references: [id], onDelete: Cascade)
+  uploadedBy User            @relation(fields: [uploadedById], references: [id])
+
+  @@index([directoryId])
+  @@map("client_documents")
 }
 
 model VehicleImage {
@@ -170,6 +209,7 @@ model VehicleImage {
   originalName String
   mimeType     String
   size         Int
+  rotation     Int      @default(0)
   uploadedAt   DateTime @default(now())
 
   vehicle      Vehicle  @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
@@ -266,6 +306,7 @@ model RequestImage {
   mimeType     String
   size         Int
   imageType    RequestImageType @default(photo)
+  rotation     Int      @default(0)
   uploadedAt   DateTime @default(now())
 
   request      Request  @relation(fields: [requestId], references: [id], onDelete: Cascade)
@@ -399,4 +440,38 @@ model Notification {
   @@index([userId, read])
   @@index([createdAt])
   @@map("notifications")
+}
+
+model TechnicalInspection {
+  id                 String   @id @default(uuid())
+  registrationNumber String
+  validFrom          DateTime
+  validTo            DateTime
+  notes              String?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+  createdById        String
+
+  createdBy User @relation(fields: [createdById], references: [id])
+
+  @@index([registrationNumber])
+  @@index([validTo])
+  @@map("technical_inspections")
+}
+
+model Vignette {
+  id                 String   @id @default(uuid())
+  registrationNumber String
+  validFrom          DateTime
+  validTo            DateTime
+  notes              String?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+  createdById        String
+
+  createdBy User @relation(fields: [createdById], references: [id])
+
+  @@index([registrationNumber])
+  @@index([validTo])
+  @@map("vignettes")
 }

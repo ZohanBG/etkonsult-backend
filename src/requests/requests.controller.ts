@@ -408,4 +408,12 @@ export class RequestsController {
   async deleteRequestImage(@Param('imageId') imageId: string) {
     await this.requestsService.deleteRequestImage(imageId);
   }
+
+  @Patch('images/:imageId/rotation')
+  async setRequestImageRotation(
+    @Param('imageId') imageId: string,
+    @Body() body: { rotation: number },
+  ) {
+    return this.requestsService.setRequestImageRotation(imageId, body.rotation);
+  }
 }

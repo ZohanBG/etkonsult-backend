@@ -24,6 +24,8 @@ import { AuditModule } from './audit/audit.module.js';
 import { RequestsModule } from './requests/requests.module.js';
 import { InsuranceModule } from './insurance/insurance.module.js';
 import { ResourcesModule } from './resources/resources.module.js';
+import { ClientDocumentsModule } from './client-documents/client-documents.module.js';
+import { VehicleDocumentsModule } from './vehicle-documents/vehicle-documents.module.js';
 import { AdminNotificationsModule } from './admin-notifications/admin-notifications.module.js';
 import { PushNotificationsModule } from './push-notifications/push-notifications.module.js';
 import { NotificationsModule } from './notifications/notifications.module.js';
@@ -55,6 +57,8 @@ import { EventsModule } from './events/events.module.js';
     RequestsModule,
     InsuranceModule,
     ResourcesModule,
+    ClientDocumentsModule,
+    VehicleDocumentsModule,
     AdminNotificationsModule,
     PushNotificationsModule,
     NotificationsModule,

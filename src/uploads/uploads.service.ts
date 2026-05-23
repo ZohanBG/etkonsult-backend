@@ -412,4 +412,13 @@ export class UploadsService {
       where: { vehicleId },
     });
   }
+
+  async setVehicleImageRotation(imageId: string, rotation: number) {
+    const normalized = ((Math.round(rotation) % 360) + 360) % 360;
+    return this.prisma.vehicleImage.update({
+      where: { id: imageId },
+      data: { rotation: normalized },
+      select: { id: true, rotation: true },
+    });
+  }
 }
